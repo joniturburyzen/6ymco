@@ -1,45 +1,23 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:google_sign_in/google_sign_in.dart';
 import '../../models/user_profile.dart';
 import '../../models/workout_plan.dart';
 
 class FirebaseService {
   static final _auth = FirebaseAuth.instance;
   static final _db = FirebaseFirestore.instance;
-  static final _googleSignIn = GoogleSignIn();
 
   static User? get currentUser => _auth.currentUser;
   static String? get uid => _auth.currentUser?.uid;
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   static Future<User?> signInWithGoogle() async {
-    if (kIsWeb) {
-      // En web usamos signInWithPopup — no necesita client ID manual
-      final provider = GoogleAuthProvider();
-      final result = await _auth.signInWithPopup(provider);
-      return result.user;
-    }
-
-    // Mobile (por si en el futuro se añade)
-    final googleUser = await _googleSignIn.signIn();
-    if (googleUser == null) return null;
-    final googleAuth = await googleUser.authentication;
-    final credential = GoogleAuthProvider.credential(
-      accessToken: googleAuth.accessToken,
-      idToken: googleAuth.idToken,
-    );
-    final result = await _auth.signInWithCredential(credential);
+    final provider = GoogleAuthProvider();
+    final result = await _auth.signInWithPopup(provider);
     return result.user;
   }
 
   static Future<void> signOut() async {
-    if (kIsWeb) {
-      await _auth.signOut();
-      return;
-    }
-    await _googleSignIn.signOut();
     await _auth.signOut();
   }
 
