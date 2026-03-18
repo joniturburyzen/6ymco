@@ -115,7 +115,7 @@ class UserProfile {
     this.createdAt,
   });
 
-  bool get isComplete => fichaComplete && arComplete;
+  bool get isComplete => fichaComplete;
 
   Map<String, dynamic> toMap() => {
     'uid': uid,

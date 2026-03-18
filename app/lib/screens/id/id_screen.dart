@@ -31,10 +31,8 @@ class _IdScreenState extends State<IdScreen> {
     });
   }
 
-  void _onBothComplete() {
-    if (_fichaComplete && _arComplete) {
-      context.go('/home');
-    }
+  void _onFichaComplete() {
+    if (_fichaComplete) context.go('/home');
   }
 
   @override
@@ -99,7 +97,7 @@ class _IdScreenState extends State<IdScreen> {
                             ),
                           );
                           setState(() => _fichaComplete = true);
-                          _onBothComplete();
+                          _onFichaComplete();
                         },
                       ),
                     ),
@@ -119,7 +117,6 @@ class _IdScreenState extends State<IdScreen> {
                           );
                           if (result == true && mounted) {
                             setState(() => _arComplete = true);
-                            _onBothComplete();
                           }
                         },
                       ),
@@ -127,7 +124,7 @@ class _IdScreenState extends State<IdScreen> {
                   ],
                 ),
               ),
-              if (_fichaComplete && _arComplete)
+              if (_fichaComplete)
                 Padding(
                   padding: const EdgeInsets.only(top: 24),
                   child: SizedBox(
