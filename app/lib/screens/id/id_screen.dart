@@ -31,9 +31,6 @@ class _IdScreenState extends State<IdScreen> {
     });
   }
 
-  void _onFichaComplete() {
-    if (_fichaComplete) context.go('/home');
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -97,7 +94,6 @@ class _IdScreenState extends State<IdScreen> {
                             ),
                           );
                           setState(() => _fichaComplete = true);
-                          _onFichaComplete();
                         },
                       ),
                     ),
