@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ANÁLISIS AR</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:#0a0a0a; color:#fff;
+  font-family:'Courier New', monospace;
+  height:100vh; display:flex; flex-direction:column; overflow:hidden;
+}
+
+/* ── Loading ── */
+#loading {
+  position:absolute; inset:0; background:#0a0a0a;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; z-index:10;
+}
+.spinner {
+  width:28px; height:28px;
+  border:1.5px solid #1a1a1a; border-top-color:#00FF88;
+  border-radius:50%; animation:spin 1s linear infinite;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ── Header ── */
+#header {
+  padding:14px 20px 12px;
+  border-bottom:1px solid #1a1a1a;
+  display:flex; align-items:center; justify-content:space-between;
+  flex-shrink:0;
+}
+.h-title { color:#00FF88; font-size:11px; letter-spacing:4px; }
+.h-step  { color:#444; font-size:10px; letter-spacing:1px; }
+#btn-close {
+  background:none; border:none; color:#444; cursor:pointer;
+  font-size:16px; line-height:1; padding:2px 4px;
+}
+#btn-close:hover { color:#888; }
+
+/* ── Content ── */
+#content {
+  flex:1; display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  padding:16px; gap:14px; overflow:hidden;
+}
+
+/* ── Height input ── */
+#state-height { display:none; flex-direction:column; align-items:center; gap:20px; width:100%; max-width:280px; }
+.lbl { color:#444; font-size:10px; letter-spacing:3px; }
+#height-input {
+  width:100%; padding:10px 0;
+  background:transparent; border:none; border-bottom:1px solid #333;
+  color:#fff; font-family:'Courier New', monospace; font-size:28px;
+  text-align:center; outline:none;
+}
+#height-input:focus { border-bottom-color:#00FF88; }
+.hint { color:#333; font-size:9px; letter-spacing:1px; text-align:center; line-height:1.7; }
+
+/* ── Camera ── */
+#state-camera { display:none; flex-direction:column; align-items:center; gap:10px; width:100%; }
+#cam-wrap {
+  position:relative; width:100%; max-width:340px;
+  border:1px solid #222; border-radius:2px; overflow:hidden;
+  transform:scaleX(-1); /* efecto espejo */
+}
+#video  { width:100%; height:auto; display:block; }
+#canvas { position:absolute; top:0; left:0; width:100%; height:100%; }
+#instruction { color:#666; font-size:10px; line-height:1.7; text-align:center; max-width:300px; white-space:pre-line; }
+#pose-status { font-size:9px; letter-spacing:2px; color:#444; }
+#pose-status.ok { color:#00FF88; }
+
+/* ── Processing ── */
+#state-proc { display:none; flex-direction:column; align-items:center; gap:14px; }
+
+/* ── Button ── */
+.btn {
+  width:100%; max-width:280px; padding:14px;
+  background:#00FF88; color:#0a0a0a;
+  font-family:'Courier New', monospace; font-size:11px; font-weight:bold;
+  letter-spacing:3px; border:none; cursor:pointer; border-radius:2px;
+}
+.btn:disabled { background:#1a1a1a; color:#333; cursor:not-allowed; }
+</style>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loading">
+  <div class="spinner"></div>
+  <div class="lbl" id="loading-txt">CARGANDO MEDIAPIPE...</div>
+</div>
+
+<!-- Header -->
+<div id="header" style="display:none">
+  <span class="h-title" id="h-title">ANÁLISIS AR</span>
+  <span class="h-step"  id="h-step"></span>
+  <button id="btn-close" title="Cerrar">✕</button>
+</div>
+
+<!-- Content -->
+<div id="content" style="display:none">
+
+  <!-- Height -->
+  <div id="state-height">
+    <div class="lbl">TU ALTURA</div>
+    <input id="height-input" type="number" min="140" max="220" placeholder="175" inputmode="numeric">
+    <div class="lbl" style="color:#555;letter-spacing:1px">centímetros</div>
+    <div class="hint">Se usa para calibrar proporciones.<br>No se guarda como dato de salud.</div>
+    <button class="btn" id="btn-height">CONTINUAR</button>
+  </div>
+
+  <!-- Camera -->
+  <div id="state-camera">
+    <div id="cam-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas"></canvas>
+    </div>
+    <div id="instruction" class="lbl" style="color:#666;letter-spacing:1px"></div>
+    <div id="pose-status" class="lbl">BUSCANDO POSE...</div>
+    <button class="btn" id="btn-capture" disabled>CAPTURAR</button>
+  </div>
+
+  <!-- Processing -->
+  <div id="state-proc">
+    <div class="spinner"></div>
+    <div class="lbl">CALCULANDO PROPORCIONES...</div>
+  </div>
+
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+  }
+}
+</script>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver, DrawingUtils } from '@mediapipe/tasks-vision';
+
+// ── Config de pasos ──────────────────────────────────────────────────────
+const STEPS = [
+  {
+    key: 'neutral',
+    title: 'POSTURA NEUTRAL',
+    step: '1 / 3',
+    instruction: 'De pie, brazos a los lados, mirando al frente.\nDistancia: 2 metros de la cámara.',
+    key_lm: [11, 12, 23, 24, 25, 26, 27, 28],
+  },
+  {
+    key: 'squat',
+    title: 'SENTADILLA PARCIAL',
+    step: '2 / 3',
+    instruction: 'Flexiona las rodillas ~45° con la espalda recta.\nMantén la posición.',
+    key_lm: [23, 24, 25, 26, 27, 28],
+  },
+  {
+    key: 'overhead',
+    title: 'BRAZOS ARRIBA',
+    step: '3 / 3',
+    instruction: 'Levanta los brazos con las palmas mirándose entre sí.\nSin arquear la espalda.',
+    key_lm: [11, 12, 13, 14, 23, 24],
+  },
+];
+
+// ── Estado ───────────────────────────────────────────────────────────────
+let poseLandmarker = null;
+let drawingUtils   = null;
+let stream         = null;
+let currentResult  = null;
+let rafId          = null;
+let stepIdx        = 0;
+const captures     = {};
+
+// ── DOM ──────────────────────────────────────────────────────────────────
+const loading      = document.getElementById('loading');
+const loadingTxt   = document.getElementById('loading-txt');
+const header       = document.getElementById('header');
+const content      = document.getElementById('content');
+const hTitle       = document.getElementById('h-title');
+const hStep        = document.getElementById('h-step');
+const btnClose     = document.getElementById('btn-close');
+
+const stHeight     = document.getElementById('state-height');
+const stCamera     = document.getElementById('state-camera');
+const stProc       = document.getElementById('state-proc');
+
+const heightInput  = document.getElementById('height-input');
+const btnHeight    = document.getElementById('btn-height');
+
+const video        = document.getElementById('video');
+const canvas       = document.getElementById('canvas');
+const ctx          = canvas.getContext('2d');
+const instruction  = document.getElementById('instruction');
+const poseStatus   = document.getElementById('pose-status');
+const btnCapture   = document.getElementById('btn-capture');
+
+// ── Init ─────────────────────────────────────────────────────────────────
+async function init() {
+  try {
+    const vision = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+    );
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+        delegate: 'GPU',
+      },
+      runningMode: 'VIDEO',
+      numPoses: 1,
+      minPoseDetectionConfidence: 0.5,
+      minPosePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+    drawingUtils = new DrawingUtils(ctx);
+
+    loading.style.display = 'none';
+    header.style.display  = 'flex';
+    content.style.display = 'flex';
+    show('height');
+  } catch (e) {
+    loadingTxt.textContent = 'Error: ' + e.message;
+  }
+}
+
+// ── Mostrar estado ────────────────────────────────────────────────────────
+function show(s) {
+  stHeight.style.display = s === 'height'   ? 'flex' : 'none';
+  stCamera.style.display = s === 'camera'   ? 'flex' : 'none';
+  stProc.style.display   = s === 'proc'     ? 'flex' : 'none';
+}
+
+// ── Cámara ────────────────────────────────────────────────────────────────
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await new Promise(r => { video.onloadedmetadata = r; });
+    await video.play();
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    loop();
+  } catch (e) {
+    instruction.textContent = 'Sin acceso a la cámara: ' + e.message;
+  }
+}
+
+function stopCamera() {
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+}
+
+// ── Loop de detección ─────────────────────────────────────────────────────
+let lastT = -1;
+function loop() {
+  rafId = requestAnimationFrame(loop);
+  if (video.readyState < 2 || video.currentTime === lastT) return;
+  lastT = video.currentTime;
+
+  currentResult = poseLandmarker.detectForVideo(video, performance.now());
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (currentResult.landmarks.length > 0) {
+    drawingUtils.drawConnectors(currentResult.landmarks[0],
+      PoseLandmarker.POSE_CONNECTIONS, { color: '#00FF8866', lineWidth: 2 });
+    drawingUtils.drawLandmarks(currentResult.landmarks[0],
+      { radius: 3, color: '#00FF88', fillColor: '#00FF88' });
+  }
+
+  const valid = isPoseValid(STEPS[stepIdx].key_lm);
+  btnCapture.disabled = !valid;
+  poseStatus.textContent = valid ? 'POSE DETECTADA ✓' : 'BUSCANDO POSE...';
+  poseStatus.className = valid ? 'lbl ok' : 'lbl';
+}
+
+function isPoseValid(indices, minVis = 0.55) {
+  if (!currentResult || !currentResult.landmarks.length) return false;
+  const lm = currentResult.landmarks[0];
+  return indices.every(i => lm[i] && lm[i].visibility >= minVis);
+}
+
+// ── Captura ───────────────────────────────────────────────────────────────
+function capture() {
+  if (!currentResult || !currentResult.landmarks.length) return;
+
+  captures[STEPS[stepIdx].key] = {
+    lm: currentResult.landmarks[0].map(l => ({
+      x: l.x, y: l.y, z: l.z ?? 0, v: l.visibility ?? 0,
+    })),
+    wlm: (currentResult.worldLandmarks[0] ?? []).map(l => ({
+      x: l.x, y: l.y, z: l.z ?? 0, v: l.visibility ?? 0,
+    })),
+  };
+
+  stepIdx++;
+
+  if (stepIdx >= STEPS.length) {
+    stopCamera();
+    show('proc');
+    hTitle.textContent = 'ANÁLISIS AR';
+    hStep.textContent  = '';
+    setTimeout(compute, 300);
+  } else {
+    loadStep(stepIdx);
+  }
+}
+
+function loadStep(i) {
+  const s = STEPS[i];
+  hTitle.textContent     = s.title;
+  hStep.textContent      = s.step;
+  instruction.textContent = s.instruction;
+  btnCapture.disabled    = true;
+  poseStatus.textContent = 'BUSCANDO POSE...';
+  poseStatus.className   = 'lbl';
+}
+
+// ── Cómputo antropométrico ────────────────────────────────────────────────
+function d3(a, b) {
+  return Math.sqrt((a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2);
+}
+function mid(a, b) {
+  return { x:(a.x+b.x)/2, y:(a.y+b.y)/2, z:(a.z+b.z)/2 };
+}
+function angle3(a, b, c) {
+  const abx=a.x-b.x, aby=a.y-b.y, abz=a.z-b.z;
+  const cbx=c.x-b.x, cby=c.y-b.y, cbz=c.z-b.z;
+  const dot = abx*cbx + aby*cby + abz*cbz;
+  const mAB = Math.sqrt(abx**2+aby**2+abz**2);
+  const mCB = Math.sqrt(cbx**2+cby**2+cbz**2);
+  if (!mAB || !mCB) return 0;
+  return Math.acos(Math.max(-1, Math.min(1, dot/(mAB*mCB)))) * 180/Math.PI;
+}
+function atan2Deg(a, b) {
+  return Math.atan2(b.y-a.y, b.x-a.x) * 180/Math.PI;
+}
+
+function compute() {
+  try {
+    const nw  = captures.neutral.wlm;
+    const sw  = captures.squat.wlm;
+    const ow  = captures.overhead.wlm;
+    const nlm = captures.neutral.lm;
+
+    // Proporciones (world coords en metros)
+    const femur = (d3(nw[23],nw[25]) + d3(nw[24],nw[26])) / 2;
+    const tibia = (d3(nw[25],nw[27]) + d3(nw[26],nw[28])) / 2;
+    const torso = d3(mid(nw[23],nw[24]), mid(nw[11],nw[12]));
+    const totalH = d3(nw[0], mid(nw[27],nw[28]));
+
+    // Ángulo pelvis (image coords 2D)
+    const pelvisAngle = atan2Deg(nlm[23], nlm[24]);
+
+    // ROM rodilla (sentadilla, world)
+    const kneeFlexion = angle3(sw[23], sw[25], sw[27]);
+
+    // ROM hombro (overhead, world)
+    const shoulderFlexion = angle3(ow[23], ow[11], ow[13]);
+
+    // Contorno (image coords normalizados)
+    const contourIdx = [0,11,13,15,23,25,27,28,26,24,16,14,12];
+    const contourPoints = contourIdx
+      .map(i => nlm[i]).filter(Boolean)
+      .map(l => ({ x: l.x, y: l.y }));
+
+    // Landmarks completos
+    const LM_NAMES = [
+      'nose','left_eye_inner','left_eye','left_eye_outer',
+      'right_eye_inner','right_eye','right_eye_outer',
+      'left_ear','right_ear','mouth_left','mouth_right',
+      'left_shoulder','right_shoulder','left_elbow','right_elbow',
+      'left_wrist','right_wrist','left_pinky','right_pinky',
+      'left_index','right_index','left_thumb','right_thumb',
+      'left_hip','right_hip','left_knee','right_knee',
+      'left_ankle','right_ankle','left_heel','right_heel',
+      'left_foot_index','right_foot_index',
+    ];
+    const landmarks = nlm.map((l, i) => ({
+      type: LM_NAMES[i] ?? `lm_${i}`,
+      x: l.x, y: l.y, z: l.z, likelihood: l.v,
+    }));
+
+    const mesh = {
+      femur_tibia_ratio:  tibia > 0 ? +(femur/tibia).toFixed(4) : 1.0,
+      torso_height_ratio: totalH > 0 ? +(torso/totalH).toFixed(4) : 0.33,
+      pelvis_angle: +pelvisAngle.toFixed(2),
+      rom: {
+        knee_flexion:     [0, +kneeFlexion.toFixed(1)],
+        shoulder_flexion: [0, +shoulderFlexion.toFixed(1)],
+      },
+      landmarks,
+      contour_points: contourPoints,
+    };
+
+    window.parent.postMessage(JSON.stringify({ type: 'ar_result', mesh }), '*');
+  } catch (e) {
+    window.parent.postMessage(JSON.stringify({ type: 'ar_error', error: e.message }), '*');
+  }
+}
+
+// ── Listeners ─────────────────────────────────────────────────────────────
+btnClose.addEventListener('click', () => {
+  stopCamera();
+  window.parent.postMessage(JSON.stringify({ type: 'ar_close' }), '*');
+});
+
+btnHeight.addEventListener('click', async () => {
+  const v = parseInt(heightInput.value, 10);
+  if (v < 140 || v > 220) {
+    heightInput.style.borderBottomColor = '#ff4444';
+    return;
+  }
+  show('camera');
+  loadStep(0);
+  await startCamera();
+});
+
+btnCapture.addEventListener('click', capture);
+
+// ── Arrancar ──────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>

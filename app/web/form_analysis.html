@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ANÁLISIS DE FORMA</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:#0a0a0a; color:#fff;
+  font-family:'Courier New', monospace;
+  height:100vh; display:flex; flex-direction:column; overflow:hidden;
+}
+
+/* ── Loading ── */
+#loading {
+  position:absolute; inset:0; background:#0a0a0a;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; z-index:20;
+}
+.spinner {
+  width:28px; height:28px;
+  border:1.5px solid #1a1a1a; border-top-color:#00FF88;
+  border-radius:50%; animation:spin 1s linear infinite;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ── Header ── */
+#header {
+  padding:12px 16px; border-bottom:1px solid #1a1a1a;
+  display:flex; align-items:center; justify-content:space-between;
+  flex-shrink:0; z-index:5; position:relative;
+}
+.h-title { color:#00FF88; font-size:11px; letter-spacing:4px; }
+.h-phase { color:#444; font-size:10px; letter-spacing:1px; }
+#btn-close {
+  background:none; border:none; color:#444; cursor:pointer;
+  font-size:18px; line-height:1; padding:2px 6px; font-family:monospace;
+}
+#btn-close:hover { color:#888; }
+
+/* ── Camera wrap ── */
+#cam-wrap {
+  flex:1; position:relative; overflow:hidden;
+}
+#cam-video {
+  position:absolute; inset:0; width:100%; height:100%;
+  object-fit:cover; transform:scaleX(-1);
+  opacity:0; transition:opacity 0.4s;
+}
+#cam-video.visible { opacity:1; }
+#cam-canvas {
+  position:absolute; inset:0; width:100%; height:100%;
+  transform:scaleX(-1); pointer-events:none;
+}
+
+/* ── Bottom overlay ── */
+#overlay {
+  position:absolute; bottom:0; left:0; right:0; padding:20px 16px 24px;
+  background:linear-gradient(transparent, rgba(10,10,10,0.92) 40%);
+  display:flex; flex-direction:column; align-items:center; gap:10px; z-index:10;
+}
+#status-txt { color:#00FF88; font-size:12px; letter-spacing:2px; text-align:center; }
+#sub-txt    { color:#555; font-size:11px; text-align:center; line-height:1.5; }
+
+/* ── Record counter ── */
+#rec-row {
+  display:none; flex-direction:row; align-items:center; gap:10px;
+}
+.rec-dot {
+  width:8px; height:8px; border-radius:50%; background:#ff4444;
+  animation:blink 1s ease-in-out infinite;
+}
+@keyframes blink { 50% { opacity:0.15; } }
+#rec-time   { color:#fff; font-size:22px; letter-spacing:2px; font-weight:bold; }
+#rec-frames { color:#555; font-size:10px; letter-spacing:2px; }
+
+/* ── Action button ── */
+#btn-action {
+  display:none; padding:11px 36px;
+  border:1px solid #00FF88; background:none;
+  color:#00FF88; font-family:'Courier New', monospace;
+  font-size:12px; letter-spacing:3px; cursor:pointer;
+}
+#btn-action:hover { background:#00FF88; color:#0a0a0a; }
+
+/* ── Done overlay ── */
+#done-overlay {
+  position:absolute; inset:0; background:#0a0a0a;
+  display:none; flex-direction:column;
+  align-items:center; justify-content:center; gap:16px; z-index:15;
+}
+</style>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loading">
+  <div class="spinner"></div>
+  <div style="color:#444;font-size:10px;letter-spacing:3px" id="loading-txt">INICIANDO CÁMARA...</div>
+</div>
+
+<!-- Header -->
+<div id="header">
+  <span class="h-title">ANÁLISIS DE FORMA</span>
+  <span class="h-phase" id="h-phase">POSICIONAMIENTO</span>
+  <button id="btn-close">✕</button>
+</div>
+
+<!-- Camera -->
+<div id="cam-wrap">
+  <video id="cam-video" autoplay playsinline muted></video>
+  <canvas id="cam-canvas"></canvas>
+
+  <div id="overlay">
+    <div id="rec-row">
+      <div class="rec-dot"></div>
+      <span id="rec-time">8</span>
+      <span id="rec-frames">0 / 5 FRAMES</span>
+    </div>
+    <div id="status-txt">BUSCANDO POSE...</div>
+    <div id="sub-txt">Colócate de frente a la cámara, a 2–3m de distancia</div>
+    <button id="btn-action">GRABAR</button>
+  </div>
+</div>
+
+<!-- Done overlay -->
+<div id="done-overlay">
+  <div class="spinner"></div>
+  <div style="color:#00FF88;font-size:11px;letter-spacing:3px">ENVIANDO FRAMES...</div>
+</div>
+
+<!-- Capture canvas (hidden) -->
+<canvas id="cap-canvas" style="display:none"></canvas>
+
+<script type="importmap">
+{
+  "imports": {
+    "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+  }
+}
+</script>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver, DrawingUtils } from '@mediapipe/tasks-vision';
+
+// ── DOM ───────────────────────────────────────────────────────────────────────
+const loading    = document.getElementById('loading');
+const loadingTxt = document.getElementById('loading-txt');
+const hPhase     = document.getElementById('h-phase');
+const video      = document.getElementById('cam-video');
+const camCanvas  = document.getElementById('cam-canvas');
+const capCanvas  = document.getElementById('cap-canvas');
+const ctx        = camCanvas.getContext('2d');
+const capCtx     = capCanvas.getContext('2d');
+const statusTxt  = document.getElementById('status-txt');
+const subTxt     = document.getElementById('sub-txt');
+const btnAction  = document.getElementById('btn-action');
+const recRow     = document.getElementById('rec-row');
+const recTime    = document.getElementById('rec-time');
+const recFrames  = document.getElementById('rec-frames');
+const doneOvl    = document.getElementById('done-overlay');
+
+// Key landmarks para validar que el cuerpo entero está en frame
+const KEY_LMS = [11, 12, 23, 24, 25, 26, 27, 28];
+const MIN_VIS  = 0.5;
+const FRAMES_TOTAL = 5;
+const REC_SECS     = 8;
+
+let landmarker  = null;
+let drawUtils   = null;
+let stream      = null;
+let rafId       = null;
+let lastT       = -1;
+let phase       = 'positioning'; // 'positioning' | 'recording' | 'done'
+let poseOk      = false;
+let currentLm   = null;
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  try {
+    const vision = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+    );
+    landmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+        delegate: 'GPU',
+      },
+      runningMode: 'VIDEO',
+      numPoses: 1,
+      minPoseDetectionConfidence: 0.5,
+      minPosePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await new Promise(r => { video.onloadedmetadata = r; });
+    await video.play();
+
+    camCanvas.width  = video.videoWidth;
+    camCanvas.height = video.videoHeight;
+    drawUtils = new DrawingUtils(ctx);
+
+    video.classList.add('visible');
+    loading.style.display = 'none';
+
+    rafId = requestAnimationFrame(loop);
+  } catch (e) {
+    loadingTxt.textContent = 'Error: ' + e.message;
+    loadingTxt.style.color = '#ff4444';
+  }
+}
+
+// ── Detection loop ────────────────────────────────────────────────────────────
+function loop() {
+  rafId = requestAnimationFrame(loop);
+  if (video.readyState < 2 || video.currentTime === lastT) return;
+  lastT = video.currentTime;
+
+  camCanvas.width  = video.videoWidth;
+  camCanvas.height = video.videoHeight;
+
+  const result = landmarker.detectForVideo(video, performance.now());
+
+  ctx.clearRect(0, 0, camCanvas.width, camCanvas.height);
+
+  if (result.landmarks?.length > 0) {
+    currentLm = result.landmarks[0];
+    const allOk = KEY_LMS.every(i => (currentLm[i]?.visibility ?? 0) >= MIN_VIS);
+
+    const color = allOk ? '#00FF8899' : '#FF660077';
+    drawUtils.drawConnectors(currentLm, PoseLandmarker.POSE_CONNECTIONS, { color, lineWidth: 1.5 });
+    drawUtils.drawLandmarks(currentLm, { color: allOk ? '#00FF88' : '#FF6600', radius: 3, lineWidth: 1 });
+
+    if (phase === 'positioning') {
+      if (allOk && !poseOk) {
+        poseOk = true;
+        statusTxt.textContent = 'POSE DETECTADA';
+        subTxt.textContent    = 'Toca GRABAR — realiza 3-5 repeticiones completas';
+        btnAction.style.display = 'block';
+      } else if (!allOk && poseOk) {
+        poseOk = false;
+        statusTxt.textContent = 'BUSCANDO POSE...';
+        subTxt.textContent    = 'Colócate de frente a la cámara, a 2–3m de distancia';
+        btnAction.style.display = 'none';
+      }
+    }
+  } else {
+    currentLm = null;
+    if (phase === 'positioning' && poseOk) {
+      poseOk = false;
+      statusTxt.textContent = 'BUSCANDO POSE...';
+      subTxt.textContent    = 'Colócate de frente a la cámara, a 2–3m de distancia';
+      btnAction.style.display = 'none';
+    }
+  }
+}
+
+// ── Start recording ───────────────────────────────────────────────────────────
+function startRecording() {
+  phase = 'recording';
+  hPhase.textContent      = 'GRABANDO';
+  btnAction.style.display = 'none';
+  statusTxt.textContent   = 'REALIZA EL EJERCICIO';
+  subTxt.textContent      = 'Haz repeticiones completas durante la cuenta atrás';
+  recRow.style.display    = 'flex';
+
+  let frames    = [];
+  let captured  = 0;
+  let countdown = REC_SECS;
+  recTime.textContent   = countdown;
+  recFrames.textContent = `${captured} / ${FRAMES_TOTAL} FRAMES`;
+
+  // Capture first frame immediately
+  frames.push(captureFrame());
+  captured++;
+  recFrames.textContent = `${captured} / ${FRAMES_TOTAL} FRAMES`;
+
+  // Capture remaining frames evenly across recording duration
+  const interval = Math.floor((REC_SECS * 1000) / (FRAMES_TOTAL - 1));
+  const captureId = setInterval(() => {
+    if (captured < FRAMES_TOTAL) {
+      frames.push(captureFrame());
+      captured++;
+      recFrames.textContent = `${captured} / ${FRAMES_TOTAL} FRAMES`;
+    }
+  }, interval);
+
+  // Countdown every second
+  const countId = setInterval(() => {
+    countdown--;
+    recTime.textContent = countdown;
+    if (countdown <= 0) {
+      clearInterval(countId);
+      clearInterval(captureId);
+      finishRecording(frames);
+    }
+  }, 1000);
+}
+
+function captureFrame() {
+  const w = video.videoWidth  || 640;
+  const h = video.videoHeight || 480;
+  capCanvas.width  = w;
+  capCanvas.height = h;
+  // Mirror to match what the user sees (CSS mirrors the video)
+  capCtx.save();
+  capCtx.translate(w, 0);
+  capCtx.scale(-1, 1);
+  capCtx.drawImage(video, 0, 0, w, h);
+  capCtx.restore();
+  return capCanvas.toDataURL('image/jpeg', 0.75);
+}
+
+function finishRecording(frames) {
+  phase = 'done';
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  recRow.style.display = 'none';
+  doneOvl.style.display = 'flex';
+  window.parent.postMessage(JSON.stringify({ type: 'frames_ready', frames }), '*');
+}
+
+// ── Botones ───────────────────────────────────────────────────────────────────
+document.getElementById('btn-close').addEventListener('click', () => {
+  window.parent.postMessage(JSON.stringify({ type: 'form_close' }), '*');
+});
+
+btnAction.addEventListener('click', () => {
+  if (phase === 'positioning' && poseOk) startRecording();
+});
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+# Flutter / Dart
+app/build/
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.idea/
+app/.packages
+app/gymco.iml
+app/.fvm/
+**/.packages
+**/.pub-cache/
+**/doc/api/
+
+# Claude settings
+.claude/
+
+# Carpeta duplicada / antigua
+6ymco/
+
+# Archivos fuente 3D (FBX grandes, no necesarios en runtime)
+*.fbx
+*.FBX
+
+# Imágenes fuente (no son los assets de la app)
+ICONOS MAQUINAS/
+WhatsApp Image*.jpeg
+*.jpeg
+
+# Archivos de conversión
+convert_fbx.py
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

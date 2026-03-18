@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>6YM.C0 Character</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: transparent; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+const W = window.innerWidth;
+const H = window.innerHeight;
+
+// ── Renderer ──────────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(W, H);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+// ── Escena ────────────────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = null; // transparente
+
+// ── Cámara ────────────────────────────────────────────────────────────────────
+const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 100);
+camera.position.set(0, 1.4, 3.2);
+camera.lookAt(0, 1.0, 0);
+
+// ── Luces ─────────────────────────────────────────────────────────────────────
+const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+scene.add(ambient);
+
+const key = new THREE.DirectionalLight(0xffffff, 1.2);
+key.position.set(2, 4, 3);
+key.castShadow = true;
+key.shadow.mapSize.set(1024, 1024);
+key.shadow.camera.near = 0.1;
+key.shadow.camera.far = 20;
+key.shadow.camera.left = -2;
+key.shadow.camera.right = 2;
+key.shadow.camera.top = 4;
+key.shadow.camera.bottom = -1;
+scene.add(key);
+
+// Luz de relleno desde abajo-frente — da profundidad al personaje
+const fill = new THREE.DirectionalLight(0x00FF88, 0.15);
+fill.position.set(-1, 0.5, 2);
+scene.add(fill);
+
+// Rim light trasera
+const rim = new THREE.DirectionalLight(0xffffff, 0.3);
+rim.position.set(-2, 3, -3);
+scene.add(rim);
+
+// ── Suelo reflectante ─────────────────────────────────────────────────────────
+const floorGeo = new THREE.CircleGeometry(1.2, 64);
+const floorMat = new THREE.MeshStandardMaterial({
+  color: 0x0a0a0a,
+  roughness: 0.1,
+  metalness: 0.8,
+  transparent: true,
+  opacity: 0.6,
+});
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// Anillo verde sutil en el suelo
+const ringGeo = new THREE.RingGeometry(0.55, 0.58, 64);
+const ringMat = new THREE.MeshBasicMaterial({ color: 0x00FF88, side: THREE.DoubleSide, transparent: true, opacity: 0.4 });
+const ring = new THREE.Mesh(ringGeo, ringMat);
+ring.rotation.x = -Math.PI / 2;
+ring.position.y = 0.001;
+scene.add(ring);
+
+// ── Loader GLB ────────────────────────────────────────────────────────────────
+const draco = new DRACOLoader();
+draco.setDecoderPath('https://unpkg.com/three@0.169.0/examples/jsm/libs/draco/');
+
+const loader = new GLTFLoader();
+loader.setDRACOLoader(draco);
+
+let mixer = null;
+let idleAction = null;
+let currentAction = null;
+
+// Carga el personaje con idle + animación ani (stretch)
+async function loadCharacter() {
+  // Personaje base (con skin)
+  const gltf = await loader.loadAsync('assets/ybot.glb');
+  const model = gltf.scene;
+
+  // Centrar y escalar
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const scale = 1.8 / size.y;
+  model.scale.setScalar(scale);
+  model.position.set(-center.x * scale, -box.min.y * scale, -center.z * scale);
+
+  model.traverse(child => {
+    if (child.isMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+    }
+  });
+
+  scene.add(model);
+  mixer = new THREE.AnimationMixer(model);
+
+  // Carga animación idle
+  const idleGltf = await loader.loadAsync('assets/bobidlenoskin.glb');
+  if (idleGltf.animations.length > 0) {
+    idleAction = mixer.clipAction(idleGltf.animations[0]);
+    idleAction.setLoop(THREE.LoopRepeat, Infinity);
+    idleAction.play();
+    currentAction = idleAction;
+  }
+
+  // Carga animación stretch (disponible para activar desde Flutter)
+  const stretchGltf = await loader.loadAsync('assets/bobaninoskin.glb');
+  window._stretchClip = stretchGltf.animations[0] || null;
+}
+
+loadCharacter().catch(console.error);
+
+// ── API para Flutter (postMessage) ───────────────────────────────────────────
+window.addEventListener('message', (e) => {
+  if (!mixer) return;
+  const { action } = e.data || {};
+  if (action === 'stretch' && window._stretchClip) {
+    const stretchAction = mixer.clipAction(window._stretchClip);
+    stretchAction.setLoop(THREE.LoopOnce, 1);
+    stretchAction.clampWhenFinished = true;
+    if (currentAction) currentAction.crossFadeTo(stretchAction, 0.3, false);
+    stretchAction.play();
+    currentAction = stretchAction;
+    // Volver a idle tras la animación
+    mixer.addEventListener('finished', function onFinish(e2) {
+      if (e2.action === stretchAction) {
+        stretchAction.crossFadeTo(idleAction, 0.5, false);
+        idleAction.play();
+        currentAction = idleAction;
+        mixer.removeEventListener('finished', onFinish);
+      }
+    });
+  }
+  if (action === 'idle' && idleAction) {
+    if (currentAction) currentAction.crossFadeTo(idleAction, 0.3, false);
+    idleAction.play();
+    currentAction = idleAction;
+  }
+});
+
+// ── Loop ──────────────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+  if (mixer) mixer.update(delta);
+  // Rotación suave del anillo
+  ring.rotation.z += delta * 0.3;
+  renderer.render(scene, camera);
+}
+animate();
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+});
+</script>
+</body>
+</html>
